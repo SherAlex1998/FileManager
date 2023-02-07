@@ -9,7 +9,6 @@
 const int countMemoryItemsSize = 256;
 #pragma endregion
 
-
 using namespace std;
 
 #pragma region Structs
@@ -41,6 +40,11 @@ struct ParsedPath
 };
 #pragma endregion
 
+Folder* rootFolder;
+Folder* currentFolder;
+
+int availableDiskSize;
+
 #pragma region AssistFunctions
 int Length(const char* str)
 {
@@ -62,8 +66,9 @@ void PrintParsedPath(ParsedPath* parsedPath)
 		{
 			cout << parsedPath->path[i][j];
 		}
-		cout << endl;
+		//cout << endl;
 	}
+	cout << endl;
 }
 
 ParsedPath* GetParsedPath(const char* path)
@@ -120,7 +125,12 @@ Folder* CreateFolder(const char* name, Folder* parent)
 
 File* CreateFile(const char* name, int size, Folder* parent)
 {
-	//File* file;
+	File* newFile = (File*)malloc(sizeof(File));
+	if (newFile->parent) newFile->parent = parent; else return nullptr;
+	newFile->name = (char*)malloc(countMemoryItemsSize * sizeof(char));
+	if (newFile->name) strcpy(newFile->name, name); else return nullptr;
+	newFile->size = size;
+	return newFile;
 }
 
 void PrintIndent(int indent)
@@ -153,16 +163,25 @@ void PrintFolderStructure(Folder* folder)
 Folder* FindFolder(ParsedPath* parsedPath)
 {
 	//ParsedPath* parsedPath = GetParsedPath(path);
+	if (parsedPath->tokenCount == 2) // Crutch for "./" and "/" when Parsed Path will containe 2 tokens, whene second token is empty
+	{
+		if (parsedPath->path[1][0] == '\0')
+		{
+			return rootFolder;
+		}
+	}
 	Folder* desiredFolder;
+	int isAbsplute = 0;
 	if (strcmp(parsedPath->path[0], "/") == 0)
 	{
 		desiredFolder = rootFolder;
+		isAbsplute = 1;
 	}
 	else
 	{
 		desiredFolder = currentFolder;
 	}
-	for (int i = 0; i < parsedPath->tokenCount; i++)
+	for (int i = isAbsplute; i < parsedPath->tokenCount; i++)
 	{
 		if (Length(parsedPath->path[i]) == 0)
 		{
@@ -180,22 +199,52 @@ Folder* FindFolder(ParsedPath* parsedPath)
 		}
 		else
 		{
+			int isDesiredFolderFinded = 0;
 			for (int j = 0; j < desiredFolder->sonsCount; j++)
 			{
 				if (strcmp(parsedPath->path[i], desiredFolder->sons[j]->name) == 0)
 				{
 					desiredFolder = desiredFolder->sons[j];
+					isDesiredFolderFinded = 1;
 					break;
 				}
 			}
+			if (!isDesiredFolderFinded) return nullptr;
 		}
 	}
 	return desiredFolder;
 }
-#pragma endregion
 
-Folder* rootFolder;
-Folder* currentFolder;
+void DeleteFolder(Folder* folder)
+{
+	if (currentFolder == folder) currentFolder = rootFolder;
+	if (folder != rootFolder)
+	{
+		folder->parent->sonsCount -= 1;
+	}
+	for (int i = 0; i < folder->sonsCount; i++)
+	{
+		DeleteFolder(folder->sons[i]);
+	}
+	for (int i = 0; i < folder->filesCount; i++)
+	{
+		availableDiskSize += folder->files[i]->size;
+		free(folder->files[i]);
+	}
+	free(folder);
+	return;
+}
+
+int GetFileCountRec(Folder* folder)
+{
+	int count = 0;
+	for (int i = 0; i < folder->sonsCount; i++)
+	{
+		count += GetFileCountRec(folder->sons[i]);
+	}
+	return count + folder->filesCount;
+}
+#pragma endregion
 
 int diskSize;
 bool isCreated;
@@ -204,32 +253,20 @@ int my_create(int disk_size)
 {
 	if (isCreated) return 0;
 	diskSize = disk_size;
+	availableDiskSize = diskSize;
 	rootFolder = CreateFolder("/", nullptr);
 	currentFolder = rootFolder;
 	isCreated = 1;
-	PrintFolderStructure(rootFolder);
+	//PrintFolderStructure(rootFolder);
 	return 1;
-}
-
-void DeleteFolder(Folder* folder)
-{
-	for (int i = 0; i < folder->sonsCount; i++)
-	{
-		DeleteFolder(folder->sons[i]);
-	}
-	for (int i = 0; i < folder->filesCount; i++)
-	{
-		free(folder->files[i]);
-	}
-	free(folder);
-	return;
 }
 
 int my_destroy()
 {
 	if (!isCreated) return 0;
 	DeleteFolder(rootFolder);
-	PrintFolderStructure(rootFolder);
+	rootFolder = nullptr;
+	//PrintFolderStructure(rootFolder);
 	return 1;
 }
 
@@ -245,33 +282,97 @@ int my_create_dir(const char* path)
 	parentFolder->sons[parentFolder->sonsCount] = CreateFolder(parsedPath->path[parsedPath->tokenCount], parentFolder);
 	if (parentFolder->sons[parentFolder->sonsCount] == nullptr) return 0;
 	parentFolder->sonsCount++;
-	PrintFolderStructure(rootFolder);
+	//PrintFolderStructure(rootFolder);
 	return 1;
 }
 
 int my_create_file(const char* path, int file_size)
 {
+	if (!isCreated) return 0;
+	if (availableDiskSize - file_size < 0) return 0;
+	availableDiskSize -= file_size;
+	ParsedPath* parsedPath = GetParsedPath(path);
+	//PrintParsedPath(parsedPath);
+	parsedPath->tokenCount -= 1;
+	Folder* parentFolder = FindFolder(parsedPath);
+	if (parentFolder == nullptr) return 0;
+	//cout << parsedPath->path[parsedPath->tokenCount] << endl;
+	parentFolder->files[parentFolder->filesCount] = CreateFile(parsedPath->path[parsedPath->tokenCount], file_size, parentFolder);
+	if (parentFolder->files[parentFolder->filesCount] == nullptr) return 0;
+	parentFolder->filesCount++;
+	//PrintFolderStructure(rootFolder);
 	return 1;
 }
 
 int my_remove(const char* path, int recursive)
 {
+	if (!isCreated) return 0;
+	ParsedPath* parsedPath = GetParsedPath(path);
+	Folder* folder = FindFolder(parsedPath);
+	if (folder == nullptr) return 0;
+	if (recursive)
+	{
+		DeleteFolder(folder);
+	}
+	else
+	{
+		if (folder->filesCount || folder->sonsCount) return 0;
+		DeleteFolder(folder);
+	}
+	PrintFolderStructure(rootFolder);
 	return 1;
 }
 
 int my_change_dir(const char* path)
 {
+	if (!isCreated) return 0;
+	ParsedPath* parsedPath = GetParsedPath(path);
+	Folder* folder = FindFolder(parsedPath);
+	currentFolder = folder;
+	//cout << currentFolder->name << endl;
+	if (folder == nullptr) return 0;
 	return 1;
 }
 
 void my_get_cur_dir(char* dst)
 {
+	Folder* desiredFolder = currentFolder;
+	ParsedPath* parsedPath = (ParsedPath*)malloc(sizeof(ParsedPath));
+	parsedPath->path = (char**)malloc(countMemoryItemsSize * sizeof(char*));
+	if (parsedPath->path)
+	{
+		for (int i = 0; i < countMemoryItemsSize; i++)
+			parsedPath->path[i] = (char*)malloc(countMemoryItemsSize * sizeof(char));
+	}
+	parsedPath->tokenCount = 0;
+	strcpy(parsedPath->path[parsedPath->tokenCount], desiredFolder->name);
+	while (desiredFolder != rootFolder)
+	{
+		desiredFolder = desiredFolder->parent;
+		strcpy(parsedPath->path[++parsedPath->tokenCount], desiredFolder->name);
+	}
+	int symbolCount = 0;
+	for (int i = parsedPath->tokenCount - 1; i >= 0; i--)
+	{
+		dst[symbolCount] = '/';
+		symbolCount++;
+		for (int j = 0; j < Length(parsedPath->path[i]); j++)
+		{
+			dst[symbolCount] = parsedPath->path[i][j];
+			symbolCount++;
+		}
+	}
+	dst[symbolCount] = '\0';
 	return;
 }
 
 int my_files_count(const char* path)
 {
-	return 1;
+	if (!isCreated) return -1;
+	ParsedPath* parsedPath = GetParsedPath(path);
+	Folder* folder = FindFolder(parsedPath);
+	if (folder == nullptr) return -1;
+	return GetFileCountRec(folder);
 }
 
 void setup_file_manager(file_manager_t* fm)
